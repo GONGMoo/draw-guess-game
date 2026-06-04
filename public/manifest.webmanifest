@@ -1,0 +1,19 @@
+{
+  "name": "你画我猜",
+  "short_name": "你画我猜",
+  "description": "两人联机你画我猜小游戏",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f7fb",
+  "theme_color": "#0f8b8d",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
