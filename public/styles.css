@@ -200,6 +200,31 @@ p {
   outline: 2px solid var(--warm);
 }
 
+.player-badge {
+  align-self: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: #e5e7eb;
+  color: #475467;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.player-badge.owner {
+  background: #fff3cd;
+  color: #936300;
+}
+
+.player-badge.submitted {
+  background: #dff7ea;
+  color: #087443;
+}
+
+.player-badge.pending {
+  background: #eef2f6;
+  color: #475467;
+}
+
 .messages {
   height: 220px;
   overflow: auto;

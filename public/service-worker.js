@@ -1,4 +1,4 @@
-const CACHE_NAME = "draw-guess-v3";
+const CACHE_NAME = "draw-guess-v6";
 const ASSETS = [
   "/",
   "/index.html",

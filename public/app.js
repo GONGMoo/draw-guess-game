@@ -60,7 +60,7 @@ socket.addEventListener("message", event => {
       state.localStrokes = [];
     }
     renderRoom();
-    redraw(payload.mode === "relay" ? payload.relay?.previousStrokes || [] : payload.strokes || []);
+    redraw(getVisibleStrokes());
   }
 
   if (type === "draw") {
@@ -116,7 +116,7 @@ guessForm.addEventListener("submit", event => {
 clearBtn.addEventListener("click", () => {
   if (state.room?.mode === "relay") {
     state.localStrokes = [];
-    redraw(state.room.relay?.previousStrokes || []);
+    redraw(getVisibleStrokes());
   } else {
     send("clear-canvas", {});
   }
@@ -157,7 +157,7 @@ canvas.addEventListener("pointermove", event => {
 
 canvas.addEventListener("pointerup", stopDrawing);
 canvas.addEventListener("pointercancel", stopDrawing);
-window.addEventListener("resize", () => redraw(state.room?.strokes || []));
+window.addEventListener("resize", () => redraw(getVisibleStrokes()));
 
 function send(type, payload) {
   if (socket.readyState !== WebSocket.OPEN) {
@@ -191,7 +191,8 @@ function renderRoom() {
     answerLabel.textContent = room.answer || "猜一猜";
   }
   wordBankLabel.textContent = room.wordBankLabel || "日常";
-  startRoundBtn.classList.toggle("hidden", !isRelay || !room.isOwner || room.status !== "waiting");
+  startRoundBtn.textContent = room.status === "relay-over" ? "再来一轮" : "开始接龙";
+  startRoundBtn.classList.toggle("hidden", !isRelay || !room.isOwner || !["waiting", "relay-over"].includes(room.status));
   startRoundBtn.disabled = room.players.length < 2;
   guessInput.disabled = isRelay
     ? room.status !== "relay-playing" || relay?.phase !== "guess" || relay?.hasSubmitted
@@ -207,7 +208,7 @@ function renderRoom() {
   playersEl.innerHTML = room.players.map(player => `
     <div class="player ${player.id === room.drawerId || player.id === state.playerId && isRelay ? "active" : ""}">
       <span>${escapeHtml(player.name)}${player.id === state.playerId ? "（你）" : ""}</span>
-      <strong>${player.score}</strong>
+      ${renderPlayerStatus(room, player)}
     </div>
   `).join("");
   renderRelayResults(room);
@@ -246,6 +247,19 @@ function drawLine(line) {
 function redraw(strokes) {
   clearCanvas();
   strokes.forEach(drawLine);
+}
+
+function getVisibleStrokes() {
+  if (state.room?.mode !== "relay") return state.room?.strokes || [];
+
+  const previousStrokes = state.room.relay?.previousStrokes || [];
+  const shouldShowLocalStrokes = state.room.status === "relay-playing"
+    && state.room.relay?.phase === "draw"
+    && !state.room.relay?.hasSubmitted;
+
+  return shouldShowLocalStrokes
+    ? [...previousStrokes, ...state.localStrokes]
+    : previousStrokes;
 }
 
 function clearCanvas() {
@@ -316,4 +330,25 @@ function renderRelayResults(room) {
       </div>
     `).join("")}
   `;
+}
+
+function renderPlayerStatus(room, player) {
+  if (room.mode !== "relay") {
+    return `<strong>${player.score}</strong>`;
+  }
+
+  if (room.status === "waiting") {
+    return player.id === room.ownerId
+      ? `<strong class="player-badge owner">房主</strong>`
+      : `<strong class="player-badge">等待</strong>`;
+  }
+
+  if (room.status === "relay-playing") {
+    const submitted = room.relay?.submittedPlayerIds?.includes(player.id);
+    return submitted
+      ? `<strong class="player-badge submitted">已提交</strong>`
+      : `<strong class="player-badge pending">作答中</strong>`;
+  }
+
+  return `<strong class="player-badge">完成</strong>`;
 }

@@ -45,6 +45,33 @@ const WORD_BANKS = {
       "电视", "音箱", "麦克风", "键盘", "鼠标", "打印机", "帐篷", "手电筒", "锤子", "螺丝刀",
       "梯子", "水壶", "花盆", "钟表", "台阶", "信封", "邮票", "礼物", "皇冠", "气球"
     ]
+  },
+  advanced: {
+    label: "进阶抽象",
+    drawDurationMs: 120_000,
+    words: [
+      "会跳舞的猪", "秃头狮子", "戴墨镜的鸭子", "健身的蚂蚁", "喝奶茶的恐龙", "上班的熊猫",
+      "骑电动车的老虎", "泡脚的章鱼", "穿西装的鸡", "会唱歌的马桶", "老板画大饼", "灵魂出窍",
+      "尴尬到抠地板", "偷吃被发现", "笑到变形", "摸鱼大师", "会飞的包子", "跑路的煎饼",
+      "蹦迪的土豆", "愤怒的鸡腿", "躺平的汉堡", "打伞的冰淇淋", "厕所开演唱会", "电梯里打篮球",
+      "正在思考人生的土豆", "被生活压弯的香蕉", "努力上岸的章鱼", "失恋的青蛙", "失眠的猫头鹰",
+      "熬夜的熊猫", "敷面膜的鳄鱼", "开挖掘机的兔子", "吃火锅的北极熊", "跳芭蕾的河马",
+      "玩滑板的乌龟", "背书包的鸵鸟", "剪头发的刺猬", "开会迟到的蜗牛", "会自拍的猩猩",
+      "涂口红的公鸡", "考研的鲨鱼", "摆烂的考拉", "赶地铁的企鹅", "吃醋的狐狸",
+      "开直播的仓鼠", "学游泳的猫", "发呆的斑马", "烫头的绵羊", "加班的螃蟹",
+      "早八的骷髅", "罢工的电风扇", "崩溃的打印机", "内卷的扫地机器人", "发疯的洗衣机",
+      "emo的电灯泡", "摸鱼的闹钟", "请假的书包", "装忙的电脑", "偷懒的拖把",
+      "蹲坑的超人", "追剧的吸尘器", "熬夜的台灯", "开小差的黑板", "发脾气的遥控器",
+      "练瑜伽的可乐", "泡温泉的饺子", "健身的鸡蛋", "失恋的薯条", "社恐的奶茶",
+      "打工的咖啡", "开车的西瓜", "看病的南瓜", "考试的草莓", "离家出走的番茄",
+      "跳水的面包", "开派对的辣椒", "戴耳机的芒果", "冲浪的肥皂", "上厕所的云朵",
+      "发呆的星星", "练拳击的豆腐", "看手机的仙人掌", "加班到冒烟的电脑", "刚睡醒的榴莲",
+      "下班冲刺的拖鞋", "偷偷减肥的炸鸡", "滑雪的土豆泥", "飞天的烤鸡", "开飞机的香蕉",
+      "跳街舞的桃子", "喝咖啡的橘子", "打篮球的西红柿", "坐地铁的豆芽", "睡觉的西瓜皮",
+      "唱歌的卷心菜", "打鼓的西葫芦", "练钢琴的苹果", "抱怨的榴莲皮", "开车的馒头",
+      "追求爱情的酸奶", "化妆的土豆片", "上班迟到的面包片", "骑自行车的香肠", "游泳的面条",
+      "翻滚的蛋挞", "唱rap的馄饨"
+    ]
   }
 };
 const WORD_BANK_OPTIONS = Object.entries(WORD_BANKS).map(([id, bank]) => ({ id, label: bank.label }));
@@ -141,6 +168,18 @@ function handleSocketData(client, chunk) {
       payloadLength = client.buffer.readUInt16BE(offset);
       offset += 2;
     } else if (payloadLength === 127) {
+      if (client.buffer.length < offset + 8) return;
+      const longPayloadLength = client.buffer.readBigUInt64BE(offset);
+      if (longPayloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+        closeClient(client);
+        return;
+      }
+      payloadLength = Number(longPayloadLength);
+      offset += 8;
+    }
+
+    if (payloadLength > 1_000_000) {
+      send(client, "error", { message: "消息太大，请少画一点再提交" });
       closeClient(client);
       return;
     }
@@ -209,6 +248,11 @@ function handleMessage(client, message) {
 
     if (room.players.length >= getMaxPlayers(room) && !room.players.includes(client.id)) {
       send(client, "error", { message: "房间已满" });
+      return;
+    }
+
+    if (client.roomId === roomId && room.players.includes(client.id)) {
+      emitRoomState(room);
       return;
     }
 
@@ -303,8 +347,9 @@ function startRound(room) {
   room.answer = pickWord(room);
   room.drawerId = room.players[room.round % 2];
   room.strokes = [];
-  room.endsAt = Date.now() + CLASSIC_ROUND_MS;
-  room.timer = setTimeout(() => finishRound(room, null), CLASSIC_ROUND_MS);
+  const duration = getClassicRoundMs(room);
+  room.endsAt = Date.now() + duration;
+  room.timer = setTimeout(() => finishRound(room, null), duration);
 }
 
 function handleGuess(room, client, rawText) {
@@ -390,6 +435,9 @@ function leaveRoom(client) {
   if (room.players.length === 0) {
     rooms.delete(room.id);
   } else {
+    if (!room.players.includes(room.ownerId)) {
+      room.ownerId = room.players[0];
+    }
     room.status = "waiting";
     room.drawerId = room.players[0];
     room.answer = "";
@@ -427,9 +475,17 @@ function broadcast(room, senderId, type, payload) {
 function send(client, type, payload) {
   if (client.socket.destroyed) return;
   const data = Buffer.from(JSON.stringify({ type, payload }), "utf8");
-  const header = data.length < 126
-    ? Buffer.from([0x81, data.length])
-    : Buffer.from([0x81, 126, data.length >> 8, data.length & 0xff]);
+  let header;
+  if (data.length < 126) {
+    header = Buffer.from([0x81, data.length]);
+  } else if (data.length <= 0xffff) {
+    header = Buffer.from([0x81, 126, data.length >> 8, data.length & 0xff]);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(data.length), 2);
+  }
   client.socket.write(Buffer.concat([header, data]));
 }
 
@@ -501,7 +557,9 @@ function startRelayRound(room) {
       items: []
     }))
   };
-  room.timer = setTimeout(() => advanceRelayStep(room), RELAY_STEP_MS);
+  const duration = getRelayStepMs(room);
+  room.endsAt = Date.now() + duration;
+  room.timer = setTimeout(() => advanceRelayStep(room), duration);
 }
 
 function handleRelaySubmit(room, client, payload) {
@@ -539,8 +597,9 @@ function advanceRelayStep(room) {
 
   room.relay.step += 1;
   room.relay.submissions = {};
-  room.endsAt = Date.now() + RELAY_STEP_MS;
-  room.timer = setTimeout(() => advanceRelayStep(room), RELAY_STEP_MS);
+  const duration = getRelayStepMs(room);
+  room.endsAt = Date.now() + duration;
+  room.timer = setTimeout(() => advanceRelayStep(room), duration);
   emitRoomState(room);
 }
 
@@ -578,6 +637,7 @@ function serializeRelay(room, viewerId) {
     totalSteps: room.relay?.totalSteps || room.players.length,
     phase: getRelayPhase(room),
     submittedCount: room.relay ? Object.keys(room.relay.submissions).length : 0,
+    submittedPlayerIds: room.relay ? Object.keys(room.relay.submissions) : [],
     hasSubmitted: Boolean(room.relay?.submissions?.[viewerId]),
     results: room.relay?.results || null
   };
@@ -636,6 +696,15 @@ function normalizePoint(point) {
 
 function normalizeAnswer(text) {
   return String(text || "").trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function getClassicRoundMs(room) {
+  return WORD_BANKS[room.wordBank]?.drawDurationMs || CLASSIC_ROUND_MS;
+}
+
+function getRelayStepMs(room) {
+  if (getRelayPhase(room) !== "draw") return RELAY_STEP_MS;
+  return WORD_BANKS[room.wordBank]?.drawDurationMs || RELAY_STEP_MS;
 }
 
 server.listen(PORT, "0.0.0.0", () => {
