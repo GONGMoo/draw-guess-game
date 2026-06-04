@@ -11,7 +11,8 @@ const state = {
   room: null,
   isDrawing: false,
   lastPoint: null,
-  timerId: null
+  timerId: null,
+  localStrokes: []
 };
 
 const lobby = document.querySelector("#lobby");
@@ -20,6 +21,7 @@ const statusText = document.querySelector("#statusText");
 const roomCode = document.querySelector("#roomCode");
 const nameInput = document.querySelector("#nameInput");
 const wordBankSelect = document.querySelector("#wordBankSelect");
+const modeSelect = document.querySelector("#modeSelect");
 const joinInput = document.querySelector("#joinInput");
 const createBtn = document.querySelector("#createBtn");
 const joinBtn = document.querySelector("#joinBtn");
@@ -29,9 +31,12 @@ const roleLabel = document.querySelector("#roleLabel");
 const answerLabel = document.querySelector("#answerLabel");
 const timerLabel = document.querySelector("#timerLabel");
 const wordBankLabel = document.querySelector("#wordBankLabel");
+const startRoundBtn = document.querySelector("#startRoundBtn");
+const relayResults = document.querySelector("#relayResults");
 const guessForm = document.querySelector("#guessForm");
 const guessInput = document.querySelector("#guessInput");
 const clearBtn = document.querySelector("#clearBtn");
+const submitRelayBtn = document.querySelector("#submitRelayBtn");
 const colorInput = document.querySelector("#colorInput");
 const sizeInput = document.querySelector("#sizeInput");
 const canvas = document.querySelector("#board");
@@ -49,9 +54,13 @@ socket.addEventListener("message", event => {
   }
 
   if (type === "room-updated") {
+    const previousStep = state.room?.relay?.step;
     state.room = payload;
+    if (payload.mode === "relay" && previousStep !== payload.relay?.step) {
+      state.localStrokes = [];
+    }
     renderRoom();
-    redraw(payload.strokes || []);
+    redraw(payload.mode === "relay" ? payload.relay?.previousStrokes || [] : payload.strokes || []);
   }
 
   if (type === "draw") {
@@ -70,6 +79,10 @@ socket.addEventListener("message", event => {
     addMessage(payload.winnerId ? `猜对了！答案是：${payload.answer}` : `时间到！答案是：${payload.answer}`, true);
   }
 
+  if (type === "relay-over") {
+    addMessage(`接龙结束，正确率 ${payload.accuracy}%`, true);
+  }
+
   if (type === "player-left") {
     addMessage("对方已离开，等待新的玩家加入。");
   }
@@ -81,7 +94,7 @@ socket.addEventListener("message", event => {
 });
 
 createBtn.addEventListener("click", () => {
-  send("create-room", { name: nameInput.value, wordBank: wordBankSelect.value });
+  send("create-room", { name: nameInput.value, wordBank: wordBankSelect.value, mode: modeSelect.value });
 });
 
 joinBtn.addEventListener("click", () => {
@@ -92,12 +105,29 @@ guessForm.addEventListener("submit", event => {
   event.preventDefault();
   const text = guessInput.value.trim();
   if (!text) return;
-  send("guess", { text });
+  if (state.room?.mode === "relay") {
+    send("relay-submit", { text });
+  } else {
+    send("guess", { text });
+  }
   guessInput.value = "";
 });
 
 clearBtn.addEventListener("click", () => {
-  send("clear-canvas", {});
+  if (state.room?.mode === "relay") {
+    state.localStrokes = [];
+    redraw(state.room.relay?.previousStrokes || []);
+  } else {
+    send("clear-canvas", {});
+  }
+});
+
+startRoundBtn.addEventListener("click", () => {
+  send("start-round", {});
+});
+
+submitRelayBtn.addEventListener("click", () => {
+  send("relay-submit", { strokes: state.localStrokes });
 });
 
 canvas.addEventListener("pointerdown", event => {
@@ -117,7 +147,11 @@ canvas.addEventListener("pointermove", event => {
     width: Number(sizeInput.value)
   };
   drawLine(line);
-  send("draw", line);
+  if (state.room?.mode === "relay") {
+    state.localStrokes.push(line);
+  } else {
+    send("draw", line);
+  }
   state.lastPoint = point;
 });
 
@@ -135,29 +169,48 @@ function send(type, payload) {
 
 function renderRoom() {
   const room = state.room;
+  const isRelay = room.mode === "relay";
+  const relay = room.relay;
   lobby.classList.add("hidden");
   game.classList.remove("hidden");
   roomCode.textContent = room.roomId;
 
   const drawer = room.players.find(player => player.id === room.drawerId);
-  statusText.textContent = room.players.length < 2
-    ? "把房间号发给朋友，等对方加入。"
-    : `${drawer?.name || "玩家"} 正在画，第 ${room.round} 轮。`;
-
-  roleLabel.textContent = room.isDrawer ? "你来画" : "你来猜";
-  answerLabel.textContent = room.answer || "猜一猜";
+  if (isRelay) {
+    const waiting = room.status === "waiting";
+    statusText.textContent = waiting
+      ? `多人接龙房间，最多 ${room.maxPlayers} 人，房主可在 2 人后开始。`
+      : `接龙第 ${room.round} 轮，第 ${(relay?.step || 0) + 1}/${relay?.totalSteps || room.players.length} 棒。`;
+    roleLabel.textContent = getRelayRoleText(room);
+    answerLabel.textContent = getRelayPromptText(room);
+  } else {
+    statusText.textContent = room.players.length < 2
+      ? "把房间号发给朋友，等对方加入。"
+      : `${drawer?.name || "玩家"} 正在画，第 ${room.round} 轮。`;
+    roleLabel.textContent = room.isDrawer ? "你来画" : "你来猜";
+    answerLabel.textContent = room.answer || "猜一猜";
+  }
   wordBankLabel.textContent = room.wordBankLabel || "日常";
-  guessInput.disabled = room.isDrawer || room.status !== "playing";
-  clearBtn.disabled = !room.isDrawer || room.status !== "playing";
-  colorInput.disabled = !room.isDrawer;
-  sizeInput.disabled = !room.isDrawer;
+  startRoundBtn.classList.toggle("hidden", !isRelay || !room.isOwner || room.status !== "waiting");
+  startRoundBtn.disabled = room.players.length < 2;
+  guessInput.disabled = isRelay
+    ? room.status !== "relay-playing" || relay?.phase !== "guess" || relay?.hasSubmitted
+    : room.isDrawer || room.status !== "playing";
+  clearBtn.disabled = isRelay
+    ? room.status !== "relay-playing" || relay?.phase !== "draw" || relay?.hasSubmitted
+    : !room.isDrawer || room.status !== "playing";
+  colorInput.disabled = isRelay ? relay?.phase !== "draw" || relay?.hasSubmitted : !room.isDrawer;
+  sizeInput.disabled = colorInput.disabled;
+  submitRelayBtn.classList.toggle("hidden", !isRelay || room.status !== "relay-playing" || relay?.phase !== "draw");
+  submitRelayBtn.disabled = relay?.hasSubmitted;
 
   playersEl.innerHTML = room.players.map(player => `
-    <div class="player ${player.id === room.drawerId ? "active" : ""}">
+    <div class="player ${player.id === room.drawerId || player.id === state.playerId && isRelay ? "active" : ""}">
       <span>${escapeHtml(player.name)}${player.id === state.playerId ? "（你）" : ""}</span>
       <strong>${player.score}</strong>
     </div>
   `).join("");
+  renderRelayResults(room);
 
   updateTimer();
   clearInterval(state.timerId);
@@ -200,6 +253,11 @@ function clearCanvas() {
 }
 
 function canDraw() {
+  if (state.room?.mode === "relay") {
+    return state.room.status === "relay-playing"
+      && state.room.relay?.phase === "draw"
+      && !state.room.relay?.hasSubmitted;
+  }
   return state.room?.isDrawer && state.room?.status === "playing";
 }
 
@@ -224,4 +282,38 @@ function escapeHtml(value) {
     "\"": "&quot;",
     "'": "&#039;"
   })[char]);
+}
+
+function getRelayRoleText(room) {
+  if (room.status === "relay-over") return "结算";
+  if (room.status !== "relay-playing") return room.isOwner ? "房主" : "等待开始";
+  if (room.relay?.hasSubmitted) return "已提交";
+  return room.relay?.phase === "draw" ? "这一棒画画" : "这一棒猜词";
+}
+
+function getRelayPromptText(room) {
+  if (room.status === "relay-over") return `${room.relay?.results?.accuracy || 0}%`;
+  if (room.status !== "relay-playing") return `${room.players.length}/${room.maxPlayers} 人`;
+  if (room.relay?.phase === "draw") return room.relay.prompt || "画出来";
+  return room.relay.previousText || "看图猜词";
+}
+
+function renderRelayResults(room) {
+  if (room.mode !== "relay" || room.status !== "relay-over" || !room.relay?.results) {
+    relayResults.classList.add("hidden");
+    relayResults.innerHTML = "";
+    return;
+  }
+
+  const results = room.relay.results;
+  relayResults.classList.remove("hidden");
+  relayResults.innerHTML = `
+    <strong>正确率 ${results.accuracy}%（${results.correctCount}/${results.totalCount}）</strong>
+    ${results.chains.map(result => `
+      <div class="relay-result-row ${result.correct ? "correct" : ""}">
+        <strong>${escapeHtml(result.originName)}：${escapeHtml(result.originalWord)} → ${escapeHtml(result.finalGuess || "未猜出")}</strong>
+        <span>${result.correct ? "正确" : "偏离"}</span>
+      </div>
+    `).join("")}
+  `;
 }

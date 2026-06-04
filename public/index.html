@@ -41,6 +41,13 @@
             <option value="mixed">混合</option>
           </select>
         </label>
+        <label>
+          模式
+          <select id="modeSelect">
+            <option value="classic">双人猜画</option>
+            <option value="relay">多人接龙</option>
+          </select>
+        </label>
         <button id="createBtn">创建房间</button>
         <div class="join-row">
           <input id="joinInput" inputmode="numeric" maxlength="4" placeholder="输入房间号" />
@@ -62,8 +69,10 @@
             <span>词库</span>
             <strong id="wordBankLabel">日常</strong>
           </div>
+          <button id="startRoundBtn" class="secondary hidden">开始接龙</button>
           <div id="players" class="players"></div>
           <div id="messages" class="messages"></div>
+          <div id="relayResults" class="relay-results hidden"></div>
           <form id="guessForm" class="guess-form">
             <input id="guessInput" autocomplete="off" placeholder="输入答案" />
             <button>发送</button>
@@ -76,6 +85,7 @@
             <input id="colorInput" type="color" value="#202124" aria-label="画笔颜色" />
             <input id="sizeInput" type="range" min="2" max="24" value="6" aria-label="画笔大小" />
             <button id="clearBtn">清空</button>
+            <button id="submitRelayBtn" class="secondary hidden">提交本棒</button>
           </div>
         </section>
       </section>
