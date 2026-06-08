@@ -310,6 +310,14 @@ function handleMessage(client, message) {
     return;
   }
 
+  if (type === "undo-canvas") {
+    if (room.mode !== "classic") return;
+    if (room.drawerId !== client.id || room.status !== "playing") return;
+    undoLastStroke(room);
+    emitRoom(room, "canvas-updated", { strokes: room.strokes });
+    return;
+  }
+
   if (type === "guess") {
     handleGuess(room, client, String(payload.text || ""));
     return;
@@ -683,7 +691,8 @@ function normalizeStrokes(strokes) {
     from: normalizePoint(line.from),
     to: normalizePoint(line.to),
     color: String(line.color || "#202124").slice(0, 16),
-    width: Math.max(1, Math.min(32, Number(line.width) || 6))
+    width: Math.max(1, Math.min(32, Number(line.width) || 6)),
+    strokeId: String(line.strokeId || "").slice(0, 80)
   }));
 }
 
@@ -696,6 +705,18 @@ function normalizePoint(point) {
 
 function normalizeAnswer(text) {
   return String(text || "").trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function undoLastStroke(room) {
+  if (room.strokes.length === 0) return;
+
+  const lastLine = room.strokes.at(-1);
+  if (!lastLine?.strokeId) {
+    room.strokes.pop();
+    return;
+  }
+
+  room.strokes = room.strokes.filter(line => line.strokeId !== lastLine.strokeId);
 }
 
 function getClassicRoundMs(room) {

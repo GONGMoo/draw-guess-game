@@ -12,7 +12,10 @@ const state = {
   isDrawing: false,
   lastPoint: null,
   timerId: null,
-  localStrokes: []
+  localStrokes: [],
+  currentStrokeId: "",
+  pendingPointerEvent: null,
+  drawFrame: 0
 };
 
 const lobby = document.querySelector("#lobby");
@@ -36,6 +39,7 @@ const relayResults = document.querySelector("#relayResults");
 const guessForm = document.querySelector("#guessForm");
 const guessInput = document.querySelector("#guessInput");
 const clearBtn = document.querySelector("#clearBtn");
+const undoBtn = document.querySelector("#undoBtn");
 const submitRelayBtn = document.querySelector("#submitRelayBtn");
 const colorInput = document.querySelector("#colorInput");
 const sizeInput = document.querySelector("#sizeInput");
@@ -64,11 +68,25 @@ socket.addEventListener("message", event => {
   }
 
   if (type === "draw") {
+    if (state.room?.mode !== "relay") {
+      state.room.strokes = [...(state.room.strokes || []), payload];
+    }
     drawLine(payload);
   }
 
   if (type === "clear-canvas") {
+    if (state.room) {
+      state.room.strokes = [];
+    }
     clearCanvas();
+    undoBtn.disabled = true;
+  }
+
+  if (type === "canvas-updated") {
+    if (state.room) {
+      state.room.strokes = payload.strokes || [];
+    }
+    redraw(state.room?.strokes || []);
   }
 
   if (type === "chat") {
@@ -122,6 +140,16 @@ clearBtn.addEventListener("click", () => {
   }
 });
 
+undoBtn.addEventListener("click", () => {
+  if (state.room?.mode === "relay") {
+    undoLocalStroke();
+    redraw(getVisibleStrokes());
+    undoBtn.disabled = !canUndo(state.room);
+  } else {
+    send("undo-canvas", {});
+  }
+});
+
 startRoundBtn.addEventListener("click", () => {
   send("start-round", {});
 });
@@ -135,25 +163,44 @@ canvas.addEventListener("pointerdown", event => {
   canvas.setPointerCapture(event.pointerId);
   state.isDrawing = true;
   state.lastPoint = getPoint(event);
+  state.currentStrokeId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 });
 
 canvas.addEventListener("pointermove", event => {
   if (!state.isDrawing || !canDraw()) return;
+  state.pendingPointerEvent = event;
+  if (!state.drawFrame) {
+    state.drawFrame = requestAnimationFrame(processPendingDraw);
+  }
+});
+
+function processPendingDraw() {
+  state.drawFrame = 0;
+  const event = state.pendingPointerEvent;
+  state.pendingPointerEvent = null;
+
+  if (!event || !state.isDrawing || !canDraw()) return;
+
   const point = getPoint(event);
   const line = {
     from: state.lastPoint,
     to: point,
     color: colorInput.value,
-    width: Number(sizeInput.value)
+    width: Number(sizeInput.value),
+    strokeId: state.currentStrokeId
   };
   drawLine(line);
   if (state.room?.mode === "relay") {
     state.localStrokes.push(line);
   } else {
+    if (state.room) {
+      state.room.strokes = [...(state.room.strokes || []), line];
+    }
     send("draw", line);
   }
+  undoBtn.disabled = false;
   state.lastPoint = point;
-});
+}
 
 canvas.addEventListener("pointerup", stopDrawing);
 canvas.addEventListener("pointercancel", stopDrawing);
@@ -200,6 +247,7 @@ function renderRoom() {
   clearBtn.disabled = isRelay
     ? room.status !== "relay-playing" || relay?.phase !== "draw" || relay?.hasSubmitted
     : !room.isDrawer || room.status !== "playing";
+  undoBtn.disabled = clearBtn.disabled || !canUndo(room);
   colorInput.disabled = isRelay ? relay?.phase !== "draw" || relay?.hasSubmitted : !room.isDrawer;
   sizeInput.disabled = colorInput.disabled;
   submitRelayBtn.classList.toggle("hidden", !isRelay || room.status !== "relay-playing" || relay?.phase !== "draw");
@@ -276,8 +324,15 @@ function canDraw() {
 }
 
 function stopDrawing() {
+  if (state.drawFrame) {
+    cancelAnimationFrame(state.drawFrame);
+    processPendingDraw();
+  }
   state.isDrawing = false;
   state.lastPoint = null;
+  state.currentStrokeId = "";
+  state.pendingPointerEvent = null;
+  state.drawFrame = 0;
 }
 
 function addMessage(text, correct = false) {
@@ -351,4 +406,21 @@ function renderPlayerStatus(room, player) {
   }
 
   return `<strong class="player-badge">完成</strong>`;
+}
+
+function canUndo(room) {
+  if (room.mode === "relay") {
+    return state.localStrokes.length > 0;
+  }
+  return Array.isArray(room.strokes) && room.strokes.length > 0;
+}
+
+function undoLocalStroke() {
+  if (state.localStrokes.length === 0) return;
+  const lastLine = state.localStrokes.at(-1);
+  if (!lastLine?.strokeId) {
+    state.localStrokes.pop();
+    return;
+  }
+  state.localStrokes = state.localStrokes.filter(line => line.strokeId !== lastLine.strokeId);
 }
